@@ -65,50 +65,9 @@ const AdminScreen = ({ navigation }) => {
         return;
       }
       
-      // First try fetching from employees collection
+      // First fetch all users with role=employee for this company
+      const usersMap = new Map();
       try {
-        const employeesQuery = query(
-          collection(db, 'employees'),
-          where('companyName', '==', companyName)
-        );
-        
-        const querySnapshot = await getDocs(employeesQuery);
-        const employeesList = [];
-        
-        querySnapshot.forEach((doc) => {
-          employeesList.push({
-            id: doc.id,
-            ...doc.data()
-          });
-        });
-        
-        // If we found employees, use them
-        if (employeesList.length > 0) {
-          setEmployees(employeesList);
-        } else {
-          // Fallback to users collection with role=employee filter
-          const usersQuery = query(
-            collection(db, 'users'),
-            where('companyName', '==', companyName),
-            where('role', '==', 'employee')
-          );
-          
-          const usersSnapshot = await getDocs(usersQuery);
-          const usersList = [];
-          
-          usersSnapshot.forEach((doc) => {
-            usersList.push({
-              id: doc.id,
-              ...doc.data()
-            });
-          });
-          
-          setEmployees(usersList);
-        }
-      } catch (error) {
-        console.error('Error fetching from employees collection:', error);
-        
-        // Fallback to users collection
         const usersQuery = query(
           collection(db, 'users'),
           where('companyName', '==', companyName),
@@ -116,15 +75,72 @@ const AdminScreen = ({ navigation }) => {
         );
         
         const usersSnapshot = await getDocs(usersQuery);
-        const usersList = [];
         
         usersSnapshot.forEach((doc) => {
-          usersList.push({
+          const userData = doc.data();
+          usersMap.set(doc.id, {
             id: doc.id,
-            ...doc.data()
+            ...userData
           });
         });
         
+       // console.log(`Found ${usersMap.size} users in users collection`);
+      } catch (error) {
+        console.error('Error fetching from users collection:', error);
+      }
+      
+      // Now fetch from employees collection and merge with user data
+      try {
+        const employeesQuery = query(
+          collection(db, 'employees')
+        );
+        
+        const querySnapshot = await getDocs(employeesQuery);
+        const employeesList = [];
+        
+        querySnapshot.forEach((doc) => {
+          const employeeData = doc.data();
+          
+          // Only include employees from this company
+          if (employeeData.companyName?.toLowerCase() === companyName) {
+            // Try to find matching user data by ID
+            const userData = usersMap.get(doc.id);
+            
+            // Merge employee and user data
+            employeesList.push({
+              id: doc.id,
+              ...employeeData,
+              // Add user data if available
+              email: userData?.email || employeeData.email || 'No email',
+              mobile: userData?.mobile || employeeData.mobile || 'No phone',
+              name: userData?.name || employeeData.employeeName || 'Unknown'
+            });
+            
+            // Remove from usersMap to track which ones were matched
+            usersMap.delete(doc.id);
+          }
+        });
+        
+        // Add any remaining users that weren't in the employees collection
+        usersMap.forEach((userData) => {
+          employeesList.push({
+            id: userData.id,
+            employeeName: userData.name,
+            email: userData.email,
+            mobile: userData.mobile,
+            companyName: userData.companyName,
+            isActive: true, // Assume active if in users but not in employees
+            ...userData
+          });
+        });
+        
+        //console.log(`Total combined employees: ${employeesList.length}`);
+        setEmployees(employeesList);
+      } catch (error) {
+        console.error('Error fetching from employees collection:', error);
+        
+        // If employees collection fails, use only users collection data
+        const usersList = Array.from(usersMap.values());
         setEmployees(usersList);
       }
     } catch (error) {
@@ -136,12 +152,12 @@ const AdminScreen = ({ navigation }) => {
     }
   };
 
-// Update your useEffect to include adminData dependency
-useEffect(() => {
-  if (user?.uid) {
-    fetchAdminData().then(() => fetchEmployees());
-  }
-}, [user, adminData?.companyName]); // Add adminData?.companyName as dependency
+  // Update your useEffect to include adminData dependency
+  useEffect(() => {
+    if (user?.uid) {
+      fetchAdminData().then(() => fetchEmployees());
+    }
+  }, [user, adminData?.companyName]); // Add adminData?.companyName as dependency
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -166,15 +182,27 @@ useEffect(() => {
     );
   });
 
+  // Update the renderEmployee function to display data correctly
   const renderEmployee = ({ item }) => {
-    // Handle data format from either employees or users collection
+    // Handle data format from combined collections
     const name = item.employeeName || item.name || 'Unknown';
     const email = item.email || 'No email';
     const phone = item.mobile || 'No phone';
     const isActive = item.isActive || false;
 
     return (
-      <View style={styles.employeeCard}>
+      <TouchableOpacity 
+        style={styles.employeeCard}
+        onPress={() => navigation.navigate('EmployeeDetail', { 
+          employee: { 
+            ...item,
+            // Ensure these fields are passed to detail screen
+            email,
+            mobile: phone,
+            employeeName: name
+          }
+        })}
+      >
         <View style={styles.employeeAvatarContainer}>
           <Icon name="account" size={36} color="#1e88e5" />
         </View>
@@ -194,7 +222,7 @@ useEffect(() => {
             {isActive ? 'Active' : 'Inactive'}
           </Text>
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
 
@@ -285,6 +313,7 @@ useEffect(() => {
   );
 };
 
+// Styles remain the same
 const styles = StyleSheet.create({
   container: {
     flex: 1,

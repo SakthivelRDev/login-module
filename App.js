@@ -12,6 +12,7 @@ import AdminScreen from './screens/AdminScreen';
 import CreateEmployeeScreen from './screens/CreateEmployeeScreen';
 import EmployeeTabNavigator from './navigation/EmployeeTabNavigator';
 import AdminTabNavigator from './navigation/AdminTabNavigator';
+import EmployeeDetailScreen from './screens/EmployeeDetailScreen';
 
 const Stack = createStackNavigator();
 
@@ -24,6 +25,7 @@ export default function App() {
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="Register" component={RegisterScreen} />
                     <Stack.Screen 
+                    
             name="Admin" 
             component={AdminTabNavigator} 
             options={{ 
@@ -31,6 +33,17 @@ export default function App() {
               title: 'Admin Dashboard'
             }} 
           />
+          <Stack.Screen 
+  name="EmployeeDetail" 
+  component={EmployeeDetailScreen}
+  options={{
+    title: 'Employee Details',
+    headerTintColor: '#fff',
+    headerStyle: {
+      backgroundColor: '#1e88e5',
+    }
+  }}
+/>
                     <Stack.Screen 
             name="Employee" 
             component={EmployeeTabNavigator} 
