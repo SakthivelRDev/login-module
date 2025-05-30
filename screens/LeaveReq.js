@@ -7,7 +7,9 @@ import {
   TouchableOpacity, 
   ActivityIndicator,
   Alert,
-  RefreshControl
+  RefreshControl,
+  Modal,
+  TextInput
 } from 'react-native';
 import { AuthContext } from '../auth-context';
 import { db } from '../firebaseConfig';
@@ -17,7 +19,7 @@ import {
   where, 
   getDocs, 
   doc, 
-  getDoc, // Added this import
+  getDoc,
   updateDoc
 } from 'firebase/firestore';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -27,6 +29,10 @@ const LeaveReq = () => {
   const [leaveRequests, setLeaveRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [responseModalVisible, setResponseModalVisible] = useState(false);
+  const [selectedRequestId, setSelectedRequestId] = useState(null);
+  const [responseAction, setResponseAction] = useState('');
+  const [responseReason, setResponseReason] = useState('');
 
   const fetchLeaveRequests = async () => {
     if (!user?.uid) return;
@@ -34,7 +40,7 @@ const LeaveReq = () => {
     try {
       setLoading(true);
       
-      // Get admin's company name first - FIXED THIS LINE
+      // Get admin's company name first
       const adminDocRef = doc(db, 'users', user.uid);
       const adminDocSnap = await getDoc(adminDocRef);
       
@@ -89,39 +95,46 @@ const LeaveReq = () => {
     fetchLeaveRequests();
   }, [user]);
 
-  const handleApprove = async (id) => {
-    try {
-      await updateDoc(doc(db, 'leaves', id), {
-        status: 'approved'
-      });
-      
-      // Update local state
-      setLeaveRequests(leaveRequests.map(req => 
-        req.id === id ? { ...req, status: 'approved' } : req
-      ));
-      
-      Alert.alert('Success', 'Leave request approved');
-    } catch (error) {
-      console.error('Error approving leave:', error);
-      Alert.alert('Error', 'Failed to approve leave request');
-    }
+  const showResponseModal = (id, action) => {
+    setSelectedRequestId(id);
+    setResponseAction(action);
+    setResponseReason('');
+    setResponseModalVisible(true);
   };
 
-  const handleReject = async (id) => {
+  const submitResponse = async () => {
+    if (!responseReason.trim()) {
+      Alert.alert('Error', 'Please provide a reason for your decision.');
+      return;
+    }
+
     try {
-      await updateDoc(doc(db, 'leaves', id), {
-        status: 'rejected'
+      await updateDoc(doc(db, 'leaves', selectedRequestId), {
+        status: responseAction,
+        adminResponse: responseReason,
+        responseDate: new Date()
       });
       
       // Update local state
       setLeaveRequests(leaveRequests.map(req => 
-        req.id === id ? { ...req, status: 'rejected' } : req
+        req.id === selectedRequestId ? { 
+          ...req, 
+          status: responseAction,
+          adminResponse: responseReason,
+          responseDate: new Date()
+        } : req
       ));
       
-      Alert.alert('Success', 'Leave request rejected');
+      // Close modal and reset values
+      setResponseModalVisible(false);
+      setSelectedRequestId(null);
+      setResponseAction('');
+      setResponseReason('');
+      
+      Alert.alert('Success', `Leave request ${responseAction}`);
     } catch (error) {
-      console.error('Error rejecting leave:', error);
-      Alert.alert('Error', 'Failed to reject leave request');
+      console.error(`Error ${responseAction} leave:`, error);
+      Alert.alert('Error', `Failed to ${responseAction} leave request`);
     }
   };
 
@@ -137,6 +150,37 @@ const LeaveReq = () => {
       month: 'short',
       day: 'numeric'
     });
+  };
+
+  // Function to get icon based on leave type
+  const getLeaveTypeIcon = (leaveType) => {
+    switch(leaveType) {
+      case 'sick_leave':
+        return "medical-bag";
+      case 'govt_holiday':
+        return "flag";
+      case 'personal_leave':
+        return "account";
+      case 'other':
+      default:
+        return "dots-horizontal-circle";
+    }
+  };
+
+  // Function to get formatted leave type name
+  const getLeaveTypeName = (leaveType) => {
+    switch(leaveType) {
+      case 'sick_leave':
+        return "Sick Leave";
+      case 'govt_holiday':
+        return "Government Holiday";
+      case 'personal_leave':
+        return "Personal Leave";
+      case 'other':
+        return "Other";
+      default:
+        return leaveType || "Not specified";
+    }
   };
 
   const renderLeaveRequest = ({ item }) => {
@@ -155,18 +199,45 @@ const LeaveReq = () => {
         </View>
         
         <View style={styles.requestInfo}>
-          <Text style={styles.leaveDate}>Date: {item.leaveDate || 'Not specified'}</Text>
-          <Text style={styles.requestTimestamp}>Requested: {formatDate(item.timestamp)}</Text>
+          <View style={styles.dateContainer}>
+            <Text style={styles.leaveDate}>Date: {item.leaveDate || 'Not specified'}</Text>
+            <Text style={styles.requestTimestamp}>Requested: {formatDate(item.timestamp)}</Text>
+          </View>
+          
+          {item.leaveType && (
+            <View style={styles.leaveTypeTag}>
+              <Icon 
+                name={getLeaveTypeIcon(item.leaveType)} 
+                size={14} 
+                color="#1e88e5" 
+              />
+              <Text style={styles.leaveTypeText}>
+                {getLeaveTypeName(item.leaveType)}
+              </Text>
+            </View>
+          )}
         </View>
         
         <Text style={styles.reasonTitle}>Reason:</Text>
         <Text style={styles.reasonText}>{item.reason || 'No reason provided'}</Text>
         
+        {item.adminResponse && (
+          <View style={styles.responseContainer}>
+            <Text style={styles.responseTitle}>Admin Response:</Text>
+            <Text style={styles.responseText}>{item.adminResponse}</Text>
+            {item.responseDate && (
+              <Text style={styles.responseDate}>
+                Responded on: {formatDate(item.responseDate instanceof Date ? item.responseDate : new Date(item.responseDate))}
+              </Text>
+            )}
+          </View>
+        )}
+        
         {(!item.status || item.status === 'pending') && (
           <View style={styles.actionButtons}>
             <TouchableOpacity 
               style={[styles.actionButton, styles.approveButton]}
-              onPress={() => handleApprove(item.id)}
+              onPress={() => showResponseModal(item.id, 'approved')}
             >
               <Icon name="check" size={20} color="#fff" />
               <Text style={styles.buttonText}>Approve</Text>
@@ -174,7 +245,7 @@ const LeaveReq = () => {
             
             <TouchableOpacity 
               style={[styles.actionButton, styles.rejectButton]}
-              onPress={() => handleReject(item.id)}
+              onPress={() => showResponseModal(item.id, 'rejected')}
             >
               <Icon name="close" size={20} color="#fff" />
               <Text style={styles.buttonText}>Reject</Text>
@@ -217,6 +288,54 @@ const LeaveReq = () => {
           </TouchableOpacity>
         </View>
       )}
+
+      {/* Response Modal */}
+      <Modal
+        visible={responseModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setResponseModalVisible(false)}
+      >
+        <View style={styles.modalBackground}>
+          <View style={styles.modalContainer}>
+            <Text style={styles.modalTitle}>
+              {responseAction === 'approved' ? 'Approve Leave Request' : 'Reject Leave Request'}
+            </Text>
+            
+            <Text style={styles.modalSubtitle}>
+              Please provide a reason for your decision:
+            </Text>
+            
+            <TextInput
+              style={styles.responseInput}
+              value={responseReason}
+              onChangeText={setResponseReason}
+              placeholder="Enter your response reason"
+              multiline={true}
+              textAlignVertical="top"
+            />
+            
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setResponseModalVisible(false)}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[
+                  styles.modalButton, 
+                  responseAction === 'approved' ? styles.submitApproveButton : styles.submitRejectButton
+                ]}
+                onPress={submitResponse}
+              >
+                <Text style={styles.submitButtonText}>Submit</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -291,7 +410,11 @@ const styles = StyleSheet.create({
   requestInfo: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 12,
+  },
+  dateContainer: {
+    flex: 1,
   },
   leaveDate: {
     fontSize: 14,
@@ -300,6 +423,20 @@ const styles = StyleSheet.create({
   requestTimestamp: {
     fontSize: 14,
     color: '#888',
+  },
+  leaveTypeTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#e3f2fd',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  leaveTypeText: {
+    fontSize: 12,
+    color: '#1e88e5',
+    marginLeft: 4,
+    fontWeight: '500',
   },
   reasonTitle: {
     fontSize: 14,
@@ -311,6 +448,28 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#333',
     marginBottom: 16,
+  },
+  responseContainer: {
+    backgroundColor: '#f5f5f5',
+    borderRadius: 6,
+    padding: 12,
+    marginBottom: 16,
+  },
+  responseTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 4,
+    color: '#555',
+  },
+  responseText: {
+    fontSize: 14,
+    color: '#333',
+    marginBottom: 4,
+  },
+  responseDate: {
+    fontSize: 12,
+    color: '#888',
+    fontStyle: 'italic',
   },
   actionButtons: {
     flexDirection: 'row',
@@ -358,6 +517,71 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: 'bold',
   },
+  
+  // Modal Styles
+  modalBackground: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContainer: {
+    width: '90%',
+    backgroundColor: 'white',
+    borderRadius: 10,
+    padding: 20,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    color: '#333',
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#555',
+    marginBottom: 16,
+  },
+  responseInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 6,
+    padding: 12,
+    height: 100,
+    marginBottom: 16,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+  },
+  modalButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    marginLeft: 10,
+  },
+  cancelButton: {
+    backgroundColor: '#f5f5f5',
+  },
+  cancelButtonText: {
+    color: '#666',
+    fontWeight: '500',
+  },
+  submitApproveButton: {
+    backgroundColor: '#43a047',
+  },
+  submitRejectButton: {
+    backgroundColor: '#e53935',
+  },
+  submitButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+  }
 });
 
 export default LeaveReq;

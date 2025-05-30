@@ -1,3 +1,6 @@
+//employee screen for the employee module of the attendance app
+// This screen allows employees to start/end their work, view their current status, and request leave.  
+
 import React, { useState, useEffect, useContext } from "react";
 import {
   StyleSheet,
@@ -12,8 +15,8 @@ import {
   StatusBar,
   ActivityIndicator,
   ScrollView,
+  FlatList
 } from "react-native";
-// Update the MapView import to ensure it's using the Expo version
 import MapView, { Marker } from "react-native-maps";
 import * as Location from "expo-location";
 import { db, auth } from "../firebaseConfig";
@@ -30,6 +33,7 @@ import {
   where,
   getDocs,
   getDoc,
+  orderBy
 } from "firebase/firestore";
 
 const EmployeeScreen = ({ navigation }) => {
@@ -42,6 +46,9 @@ const EmployeeScreen = ({ navigation }) => {
   const [leaveReason, setLeaveReason] = useState("");
   const [currentStatus, setCurrentStatus] = useState("Off Duty");
   const [loading, setLoading] = useState(true);
+  const [selectedLeaveType, setSelectedLeaveType] = useState("sick_leave");
+  const [leaveRequests, setLeaveRequests] = useState([]);
+  const [loadingLeaves, setLoadingLeaves] = useState(false);
 
   // Fetch employee data on component mount
   useEffect(() => {
@@ -81,6 +88,10 @@ const EmployeeScreen = ({ navigation }) => {
     
     fetchEmployeeData();
     getInitialLocation();
+    
+    if (user?.uid) {
+      fetchLeaveRequests();
+    }
 
     return () => {
       if (watchId !== null) {
@@ -88,6 +99,44 @@ const EmployeeScreen = ({ navigation }) => {
       }
     };
   }, [user]);
+
+  const fetchLeaveRequests = async () => {
+    if (!user?.uid) return;
+    
+    setLoadingLeaves(true);
+    try {
+      const leavesQuery = query(
+        collection(db, 'leaves'),
+        where('employeeId', '==', user.uid)
+      );
+      
+      const querySnapshot = await getDocs(leavesQuery);
+      const leaves = [];
+      
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        leaves.push({
+          id: doc.id,
+          ...data,
+          timestamp: data.timestamp?.toDate ? data.timestamp.toDate() : null,
+          responseDate: data.responseDate?.toDate ? data.responseDate.toDate() : 
+                       data.responseDate ? new Date(data.responseDate) : null
+        });
+      });
+      
+      // Sort manually by timestamp
+      leaves.sort((a, b) => {
+        if (!a.timestamp || !b.timestamp) return 0;
+        return b.timestamp - a.timestamp;
+      });
+      
+      setLeaveRequests(leaves);
+    } catch (error) {
+      console.error('Error fetching leave requests:', error);
+    } finally {
+      setLoadingLeaves(false);
+    }
+  };
 
   const requestLocationPermission = async () => {
     try {
@@ -243,7 +292,7 @@ const EmployeeScreen = ({ navigation }) => {
 
   const requestLeave = async () => {
     if (!leaveReason.trim()) {
-      Alert.alert("Error", "Please enter a reason for the leave.");
+      Alert.alert("Error", "Please enter an explanation for your leave.");
       return;
     }
 
@@ -256,6 +305,7 @@ const EmployeeScreen = ({ navigation }) => {
         employeeId: user.uid,
         employeeName: employeeData.name,
         companyName: employeeData.companyName,
+        leaveType: selectedLeaveType,
         reason: leaveReason,
         leaveDate: new Date().toISOString().split("T")[0],
         status: "pending", // Admin will approve/reject
@@ -264,49 +314,145 @@ const EmployeeScreen = ({ navigation }) => {
       
       setModalVisible(false);
       setLeaveReason("");
+      setSelectedLeaveType("sick_leave"); // Reset to default
       Alert.alert("Success", "Leave request submitted successfully.");
+      
+      // Refresh leave requests
+      fetchLeaveRequests();
     } catch (error) {
       console.error("Error requesting leave:", error);
       Alert.alert("Error", "Failed to submit leave request.");
     }
   };
 
-// Update this function in your Employee.js file
-const handleSignOut = async () => {
-  if (isWorking) {
-    Alert.alert(
-      "Warning",
-      "You are currently on duty. Do you want to end your shift and sign out?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "End Shift and Sign Out",
-          style: "destructive",
-          onPress: async () => {
-            await endWork();
-            await auth.signOut();
-            // Use navigation.reset to go back to Home screen
-            navigation.reset({
-              index: 0,
-              routes: [{ name: 'Home' }],
-            });
+  const handleSignOut = async () => {
+    if (isWorking) {
+      Alert.alert(
+        "Warning",
+        "You are currently on duty. Do you want to end your shift and sign out?",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "End Shift and Sign Out",
+            style: "destructive",
+            onPress: async () => {
+              await endWork();
+              await auth.signOut();
+              // Use navigation.reset to go back to Home screen
+              navigation.reset({
+                index: 0,
+                routes: [{ name: 'Home' }],
+              });
+            },
           },
-        },
-      ]
-    );
-  } else {
+        ]
+      );
+    } else {
+      try {
+        await auth.signOut();
+        // Use navigation.reset to go back to Home screen
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'Home' }],
+        });
+      } catch (error) {
+        Alert.alert('Error', 'Failed to log out');
+      }
+    }
+  };
+
+  // Format date helper function
+  const formatDate = (date) => {
+    if (!date) return 'Not available';
+    
     try {
-      await auth.signOut();
-      // Use navigation.reset to go back to Home screen
-      navigation.reset({
-        index: 0,
-        routes: [{ name: 'Home' }],
+      return date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
       });
     } catch (error) {
-      Alert.alert('Error', 'Failed to log out');
+      console.error('Error formatting date:', error);
+      return 'Invalid date';
     }
-  }
-};
+  };
+
+  // Render leave request item
+  const renderLeaveRequest = ({ item }) => {
+    // Get color based on status
+    const getStatusColor = () => {
+      switch (item.status) {
+        case 'approved': return '#43a047';
+        case 'rejected': return '#e53935';
+        default: return '#ffa000';
+      }
+    };
+    
+    // Get icon based on leave type
+    const getLeaveTypeIcon = () => {
+      switch(item.leaveType) {
+        case 'sick_leave': return "medical-bag";
+        case 'govt_holiday': return "flag";
+        case 'personal_leave': return "account";
+        case 'other':
+        default: return "dots-horizontal-circle";
+      }
+    };
+    
+    // Get formatted leave type name
+    const getLeaveTypeName = () => {
+      switch(item.leaveType) {
+        case 'sick_leave': return "Sick Leave";
+        case 'govt_holiday': return "Government Holiday";
+        case 'personal_leave': return "Personal Leave";
+        case 'other': return "Other";
+        default: return item.leaveType || "Not specified";
+      }
+    };
+    
+    return (
+      <View style={styles.leaveCard}>
+        <View style={styles.leaveCardHeader}>
+          <View style={styles.leaveTypeContainer}>
+            <Icon name={getLeaveTypeIcon()} size={18} color="#1e88e5" />
+            <Text style={styles.leaveTypeName}>{getLeaveTypeName()}</Text>
+          </View>
+          <View style={[styles.statusContainer, { backgroundColor: `${getStatusColor()}20` }]}>
+            <View style={[styles.statusDot, { backgroundColor: getStatusColor() }]} />
+            <Text style={[styles.statusText, { color: getStatusColor() }]}>
+              {item.status?.toUpperCase() || 'PENDING'}
+            </Text>
+          </View>
+        </View>
+        
+        <View style={styles.leaveCardDates}>
+          <Text style={styles.leaveDateText}>
+            Requested for: {item.leaveDate || 'Not specified'}
+          </Text>
+          <Text style={styles.leaveRequestDate}>
+            {formatDate(item.timestamp)}
+          </Text>
+        </View>
+        
+        <View style={styles.leaveCardContent}>
+          <Text style={styles.leaveReasonLabel}>Your reason:</Text>
+          <Text style={styles.leaveReason}>{item.reason}</Text>
+        </View>
+        
+        {item.adminResponse && (
+          <View style={styles.adminResponseContainer}>
+            <Text style={styles.adminResponseLabel}>Admin Response:</Text>
+            <Text style={styles.adminResponse}>{item.adminResponse}</Text>
+            {item.responseDate && (
+              <Text style={styles.adminResponseDate}>
+                Responded on: {formatDate(item.responseDate)}
+              </Text>
+            )}
+          </View>
+        )}
+      </View>
+    );
+  };
 
   if (loading) {
     return (
@@ -394,6 +540,34 @@ const handleSignOut = async () => {
             <Text style={styles.buttonText}>Request Leave</Text>
           </TouchableOpacity>
         </View>
+        
+        {/* Leave Requests Section */}
+        <View style={styles.sectionContainer}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Leave Requests</Text>
+            <TouchableOpacity onPress={fetchLeaveRequests}>
+              <Icon name="refresh" size={20} color="#1e88e5" />
+            </TouchableOpacity>
+          </View>
+          
+          {loadingLeaves ? (
+            <View style={styles.loadingLeaves}>
+              <ActivityIndicator size="small" color="#1e88e5" />
+              <Text style={styles.loadingLeavesText}>Loading requests...</Text>
+            </View>
+          ) : leaveRequests.length > 0 ? (
+            <FlatList
+              data={leaveRequests}
+              renderItem={renderLeaveRequest}
+              keyExtractor={(item) => item.id}
+              horizontal={false}
+              scrollEnabled={false}
+              nestedScrollEnabled={true}
+            />
+          ) : (
+            <Text style={styles.noLeavesText}>No leave requests found</Text>
+          )}
+        </View>
       </ScrollView>
 
       {/* Leave Request Modal */}
@@ -406,8 +580,106 @@ const handleSignOut = async () => {
         <View style={styles.modalBackground}>
           <View style={styles.modalContainer}>
             <Text style={styles.modalTitle}>Request Leave</Text>
+            
+            
+<Text style={styles.leaveTypeLabel}>Leave Type:</Text>
+<View style={styles.leaveTypeGrid}>
+  <TouchableOpacity 
+    style={[
+      styles.leaveTypeButton, 
+      selectedLeaveType === "sick_leave" && styles.selectedLeaveType
+    ]}
+    onPress={() => setSelectedLeaveType("sick_leave")}
+  >
+    <Icon 
+      name="medical-bag" 
+      size={20} 
+      color={selectedLeaveType === "sick_leave" ? "#fff" : "#1e88e5"} 
+    />
+    <Text 
+      style={[
+        styles.leaveTypeText, 
+        selectedLeaveType === "sick_leave" && styles.selectedLeaveTypeText
+      ]}
+    >
+      Sick Leave
+    </Text>
+  </TouchableOpacity>
+  
+  <TouchableOpacity 
+    style={[
+      styles.leaveTypeButton, 
+      selectedLeaveType === "govt_holiday" && styles.selectedLeaveType
+    ]}
+    onPress={() => setSelectedLeaveType("govt_holiday")}
+  >
+    <Icon 
+      name="flag" 
+      size={20} 
+      color={selectedLeaveType === "govt_holiday" ? "#fff" : "#1e88e5"} 
+    />
+    <Text 
+      style={[
+        styles.leaveTypeText, 
+        selectedLeaveType === "govt_holiday" && styles.selectedLeaveTypeText
+      ]}
+    >
+      Govt Holiday
+    </Text>
+  </TouchableOpacity>
+</View>
+
+<View style={styles.leaveTypeGrid}>
+  <TouchableOpacity 
+    style={[
+      styles.leaveTypeButton, 
+      selectedLeaveType === "personal_leave" && styles.selectedLeaveType
+    ]}
+    onPress={() => setSelectedLeaveType("personal_leave")}
+  >
+    <Icon 
+      name="account" 
+      size={20} 
+      color={selectedLeaveType === "personal_leave" ? "#fff" : "#1e88e5"} 
+    />
+    <Text 
+      style={[
+        styles.leaveTypeText, 
+        selectedLeaveType === "personal_leave" && styles.selectedLeaveTypeText
+      ]}
+    >
+      Personal
+    </Text>
+  </TouchableOpacity>
+  
+  <TouchableOpacity 
+    style={[
+      styles.leaveTypeButton, 
+      selectedLeaveType === "other" && styles.selectedLeaveType
+    ]}
+    onPress={() => setSelectedLeaveType("other")}
+  >
+    <Icon 
+      name="dots-horizontal-circle" 
+      size={20} 
+      color={selectedLeaveType === "other" ? "#fff" : "#1e88e5"} 
+    />
+    <Text 
+      style={[
+        styles.leaveTypeText, 
+        selectedLeaveType === "other" && styles.selectedLeaveTypeText
+      ]}
+    >
+      Other
+    </Text>
+  </TouchableOpacity>
+</View>
+            
+            <Text style={styles.explanationLabel}>
+              Explanation:
+            </Text>
             <TextInput
-              placeholder="Enter leave reason"
+              placeholder="Enter explanation for your leave request"
               value={leaveReason}
               onChangeText={setLeaveReason}
               style={styles.input}
@@ -416,7 +688,11 @@ const handleSignOut = async () => {
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={styles.modalButton}
-                onPress={() => setModalVisible(false)}
+                onPress={() => {
+                  setModalVisible(false);
+                  setSelectedLeaveType("sick_leave");
+                  setLeaveReason("");
+                }}
               >
                 <Text style={[styles.modalButtonText, { color: "#757575" }]}>
                   Cancel
@@ -564,11 +840,56 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
+    maxHeight: '80%',
   },
   modalTitle: {
     fontSize: 20,
     marginBottom: 12,
     fontWeight: "bold",
+  },
+  leaveTypeLabel: {
+    fontSize: 16,
+    fontWeight: '500',
+    marginBottom: 8,
+    color: '#333',
+  },
+  leaveTypeContainer: {
+  marginBottom: 16,
+},
+leaveTypeButton: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'center',
+  paddingVertical: 10,
+  paddingHorizontal: 12,
+  borderWidth: 1,
+  borderColor: '#1e88e5',
+  borderRadius: 6,
+  marginBottom: 8,
+  flex: 1,
+  marginHorizontal: 4,
+},
+  selectedLeaveType: {
+    backgroundColor: '#1e88e5',
+  },
+leaveTypeText: {
+  marginLeft: 8,
+  fontSize: 14,
+  color: '#1e88e5',
+},
+leaveTypeGrid: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  marginBottom: 8,
+},
+  selectedLeaveTypeText: {
+    color: '#fff',
+  },
+  explanationLabel: {
+    fontSize: 16,
+    fontWeight: '500',
+    marginBottom: 8,
+    color: '#333',
   },
   input: {
     borderColor: "#1e88e5",
@@ -594,7 +915,132 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
+    paddingBottom: 20,
   },
+  // Leave Request Section Styles
+  sectionContainer: {
+    marginTop: 16,
+    backgroundColor: 'white',
+    borderRadius: 10,
+    padding: 16,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 1,
+    elevation: 1,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  leaveCard: {
+    backgroundColor: '#f9f9f9',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+  },
+  leaveCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  leaveTypeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  leaveTypeName: {
+    marginLeft: 6,
+    fontWeight: '500',
+    color: '#1e88e5',
+  },
+  statusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  leaveCardDates: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  leaveDateText: {
+    fontSize: 14,
+    color: '#555',
+  },
+  leaveRequestDate: {
+    fontSize: 12,
+    color: '#888',
+  },
+  leaveCardContent: {
+    marginBottom: 8,
+  },
+  leaveReasonLabel: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 2,
+  },
+  leaveReason: {
+    fontSize: 14,
+    color: '#333',
+  },
+  adminResponseContainer: {
+    backgroundColor: '#f0f0f0',
+    borderRadius: 6,
+    padding: 8,
+    marginTop: 8,
+  },
+  adminResponseLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#555',
+    marginBottom: 2,
+  },
+  adminResponse: {
+    fontSize: 14,
+    color: '#333',
+  },
+  adminResponseDate: {
+    fontSize: 11,
+    color: '#888',
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  noLeavesText: {
+    textAlign: 'center',
+    color: '#888',
+    marginVertical: 16,
+  },
+  loadingLeaves: {
+    alignItems: 'center',
+    marginVertical: 16,
+  },
+  loadingLeavesText: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 8,
+  }
 });
 
 export default EmployeeScreen;
