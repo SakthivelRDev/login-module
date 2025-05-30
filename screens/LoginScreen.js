@@ -2,11 +2,13 @@
 import React, { useState } from 'react';
 import { View, TextInput, Button, Alert, StyleSheet, Text, TouchableOpacity } from 'react-native';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../firebaseConfig';
+import { doc, getDoc } from 'firebase/firestore';
+import { auth, db } from '../firebaseConfig';
 
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -15,16 +17,36 @@ export default function LoginScreen({ navigation }) {
     }
 
     try {
-      await signInWithEmailAndPassword(auth, email, password);
-      navigation.navigate('Admin');
+      setLoading(true);
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const { uid } = userCredential.user;
+      
+      // Get user data from Firestore to check role
+      const userDoc = await getDoc(doc(db, 'users', uid));
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        
+        // Navigate based on role
+        if (userData.role === 'admin') {
+          navigation.navigate('Admin');
+        } else if (userData.role === 'employee') {
+          // You'll need to create an EmployeeScreen
+          navigation.navigate('Employee');
+        }
+      } else {
+        Alert.alert('Error', 'User data not found');
+      }
     } catch (error) {
       Alert.alert('Login Failed', error.message);
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>Admin Login</Text>
+      <Text style={styles.header}>Login</Text>
       <TextInput
         style={styles.input}
         placeholder="Email"
@@ -40,7 +62,7 @@ export default function LoginScreen({ navigation }) {
         onChangeText={setPassword}
         value={password}
       />
-      <Button title="Login" onPress={handleLogin} />
+      <Button title={loading ? "Logging in..." : "Login"} onPress={handleLogin} disabled={loading} />
       
       <View style={styles.registerContainer}>
         <Text>Don't have an account? </Text>

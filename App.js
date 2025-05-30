@@ -8,6 +8,7 @@ import  HomeScreen  from './screens/HomeScreen';
 import LoginScreen from './screens/LoginScreen';
 import RegisterScreen from './screens/RegisterScreen';
 import AdminScreen from './screens/AdminScreen';
+import EmployeeScreen from './screens/Employee';
 import CreateEmployeeScreen from './screens/CreateEmployeeScreen';
 
 const Stack = createStackNavigator();
@@ -21,6 +22,7 @@ export default function App() {
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="Register" component={RegisterScreen} />
           <Stack.Screen name="Admin" component={AdminScreen} />
+          <Stack.Screen name="Employee" component={EmployeeScreen} />
           <Stack.Screen name="CreateEmployee" component={CreateEmployeeScreen} />
         </Stack.Navigator>
       </NavigationContainer>
