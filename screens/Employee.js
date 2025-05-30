@@ -271,33 +271,42 @@ const EmployeeScreen = ({ navigation }) => {
     }
   };
 
-  const handleSignOut = async () => {
-    if (isWorking) {
-      Alert.alert(
-        "Warning",
-        "You are currently on duty. Do you want to end your shift and sign out?",
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "End Shift and Sign Out",
-            style: "destructive",
-            onPress: async () => {
-              await endWork();
-              await auth.signOut();
-              navigation.replace('Home');
-            },
+// Update this function in your Employee.js file
+const handleSignOut = async () => {
+  if (isWorking) {
+    Alert.alert(
+      "Warning",
+      "You are currently on duty. Do you want to end your shift and sign out?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "End Shift and Sign Out",
+          style: "destructive",
+          onPress: async () => {
+            await endWork();
+            await auth.signOut();
+            // Use navigation.reset to go back to Home screen
+            navigation.reset({
+              index: 0,
+              routes: [{ name: 'Home' }],
+            });
           },
-        ]
-      );
-    } else {
-      try {
-        await auth.signOut();
-        navigation.replace('Home');
-      } catch (error) {
-        Alert.alert('Error', 'Failed to log out');
-      }
+        },
+      ]
+    );
+  } else {
+    try {
+      await auth.signOut();
+      // Use navigation.reset to go back to Home screen
+      navigation.reset({
+        index: 0,
+        routes: [{ name: 'Home' }],
+      });
+    } catch (error) {
+      Alert.alert('Error', 'Failed to log out');
     }
-  };
+  }
+};
 
   if (loading) {
     return (
