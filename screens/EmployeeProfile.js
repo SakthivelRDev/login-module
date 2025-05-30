@@ -7,12 +7,68 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   RefreshControl,
-  FlatList
+  Dimensions
 } from 'react-native';
 import { AuthContext } from '../auth-context';
 import { db } from '../firebaseConfig';
-import { doc, getDoc, collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import Svg, { Circle } from 'react-native-svg';
+
+const screenWidth = Dimensions.get('window').width;
+
+// Custom Progress Component that uses Expo's SVG
+const CircularProgress = ({ percentage, color, size = 80, title, subtitle }) => {
+  const strokeWidth = 8;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = radius * 2 * Math.PI;
+  const strokeDashoffset = circumference - (percentage / 100) * circumference;
+
+  return (
+    <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+      <View style={{ width: size, height: size }}>
+        <Svg width={size} height={size}>
+          {/* Background Circle */}
+          <Circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            strokeWidth={strokeWidth}
+            stroke="#E0E0E0"
+            fill="transparent"
+          />
+          {/* Progress Circle */}
+          <Circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            strokeWidth={strokeWidth}
+            stroke={color}
+            fill="transparent"
+            strokeDasharray={circumference}
+            strokeDashoffset={strokeDashoffset}
+            strokeLinecap="round"
+          />
+        </Svg>
+        <View style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          justifyContent: 'center',
+          alignItems: 'center'
+        }}>
+          <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#333' }}>
+            {Math.round(percentage)}%
+          </Text>
+        </View>
+      </View>
+      <Text style={{ marginTop: 4, fontSize: 14, fontWeight: '500', color: '#555' }}>{title}</Text>
+      <Text style={{ fontSize: 12, color: '#777' }}>{subtitle}</Text>
+    </View>
+  );
+};
 
 const EmployeeProfile = () => {
   const { user } = useContext(AuthContext);
@@ -21,6 +77,16 @@ const EmployeeProfile = () => {
   const [leaveHistory, setLeaveHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  
+  // Month selection state
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [monthlyStats, setMonthlyStats] = useState(null);
+  
+  const months = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
 
   const fetchProfileData = async () => {
     if (!user?.uid) return;
@@ -36,7 +102,6 @@ const EmployeeProfile = () => {
       
       // Fetch attendance history - with error handling
       try {
-        // First try to get recent records without orderBy to avoid index issues
         const simpleAttendanceQuery = query(
           collection(db, 'attendance'),
           where('employeeId', '==', user.uid)
@@ -82,7 +147,9 @@ const EmployeeProfile = () => {
           leaveData.push({
             id: doc.id,
             ...data,
-            timestamp: data.timestamp?.toDate ? data.timestamp.toDate() : null
+            timestamp: data.timestamp?.toDate ? data.timestamp.toDate() : null,
+            leaveDate: data.leaveDate || '',
+            status: data.status || 'pending'
           });
         });
         
@@ -105,6 +172,136 @@ const EmployeeProfile = () => {
       setRefreshing(false);
     }
   };
+
+  // Calculate monthly statistics based on attendance and leave data
+  const calculateMonthlyStats = () => {
+    // Even if no data is available, we still want to show month information
+    // Get days in selected month
+    const daysInMonth = new Date(selectedYear, selectedMonth + 1, 0).getDate();
+    
+    // Initialize counters
+    let workDays = 0;
+    let leaveDays = 0;
+    let pendingLeaveDays = 0;
+    let absentDays = 0;
+    let weekendDays = 0;
+    
+    // Count business days and weekends in month
+    let businessDays = 0;
+    for (let i = 1; i <= daysInMonth; i++) {
+      const date = new Date(selectedYear, selectedMonth, i);
+      // Check if weekend (0 = Sunday, 6 = Saturday)
+      if (date.getDay() === 0 || date.getDay() === 6) {
+        weekendDays++;
+      } else {
+        businessDays++;
+      }
+    }
+    
+    // Create a map of all dates in the month
+    const dateMap = {};
+    for (let i = 1; i <= daysInMonth; i++) {
+      const dateStr = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+      const date = new Date(selectedYear, selectedMonth, i);
+      const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+      
+      dateMap[dateStr] = { 
+        worked: false, 
+        leave: false, 
+        leaveStatus: null,
+        isWeekend: isWeekend
+      };
+    }
+    
+    // Mark attendance dates
+    attendanceHistory.forEach(record => {
+      if (!record.date) return;
+      
+      // Check if this record is for the selected month
+      const recordDate = new Date(record.date);
+      if (recordDate.getMonth() === selectedMonth && recordDate.getFullYear() === selectedYear) {
+        dateMap[record.date].worked = true;
+      }
+    });
+    
+    // Mark leave dates
+    leaveHistory.forEach(leave => {
+      if (!leave.leaveDate) return;
+      
+      // Check if this leave is for the selected month
+      const leaveDate = new Date(leave.leaveDate);
+      if (leaveDate.getMonth() === selectedMonth && leaveDate.getFullYear() === selectedYear) {
+        dateMap[leave.leaveDate].leave = true;
+        dateMap[leave.leaveDate].leaveStatus = leave.status;
+      }
+    });
+    
+    // Count days in each category
+    Object.entries(dateMap).forEach(([dateStr, day]) => {
+      // Skip weekend days in the main calculation
+      if (day.isWeekend) return;
+      
+      const date = new Date(dateStr);
+      const isPastDay = date <= new Date();
+      
+      // Skip future days for absence calculation
+      if (!isPastDay) return;
+      
+      if (day.worked) {
+        workDays++;
+      } else if (day.leave) {
+        if (day.leaveStatus === 'approved') {
+          leaveDays++;
+        } else if (day.leaveStatus === 'pending') {
+          pendingLeaveDays++;
+        } else {
+          // If rejected, count as absent
+          absentDays++;
+        }
+      } else {
+        // Not worked and no leave = absent
+        absentDays++;
+      }
+    });
+    
+    // Calculate percentages - only based on business days that have passed
+    const currentDate = new Date();
+    const isCurrentMonth = currentDate.getMonth() === selectedMonth && 
+                           currentDate.getFullYear() === selectedYear;
+    
+    // If this is current month, only consider days up to today
+    const pastBusinessDays = isCurrentMonth 
+      ? Object.entries(dateMap)
+          .filter(([dateStr, day]) => !day.isWeekend && new Date(dateStr) <= currentDate)
+          .length
+      : businessDays;
+    
+    const workPercentage = pastBusinessDays > 0 ? (workDays / pastBusinessDays) * 100 : 0;
+    const leavePercentage = pastBusinessDays > 0 ? (leaveDays / pastBusinessDays) * 100 : 0;
+    const pendingLeavePercentage = pastBusinessDays > 0 ? (pendingLeaveDays / pastBusinessDays) * 100 : 0;
+    const absentPercentage = pastBusinessDays > 0 ? (absentDays / pastBusinessDays) * 100 : 0;
+    
+    setMonthlyStats({
+      workDays,
+      leaveDays,
+      pendingLeaveDays,
+      absentDays,
+      businessDays,
+      weekendDays,
+      pastBusinessDays,
+      workPercentage,
+      leavePercentage,
+      pendingLeavePercentage,
+      absentPercentage,
+      daysInMonth,
+      isCurrentMonth
+    });
+  };
+
+  // Calculate statistics when month/year changes or when data changes
+  useEffect(() => {
+    calculateMonthlyStats();
+  }, [selectedMonth, selectedYear, attendanceHistory, leaveHistory]);
 
   useEffect(() => {
     fetchProfileData();
@@ -130,6 +327,33 @@ const EmployeeProfile = () => {
       hour: '2-digit',
       minute: '2-digit'
     });
+  };
+
+  const handlePreviousMonth = () => {
+    if (selectedMonth === 0) {
+      setSelectedMonth(11);
+      setSelectedYear(selectedYear - 1);
+    } else {
+      setSelectedMonth(selectedMonth - 1);
+    }
+  };
+
+  const handleNextMonth = () => {
+    const currentDate = new Date();
+    const isCurrentMonthYear = selectedMonth === currentDate.getMonth() && 
+                               selectedYear === currentDate.getFullYear();
+    
+    if (isCurrentMonthYear) {
+      // Don't allow going beyond current month
+      return;
+    }
+    
+    if (selectedMonth === 11) {
+      setSelectedMonth(0);
+      setSelectedYear(selectedYear + 1);
+    } else {
+      setSelectedMonth(selectedMonth + 1);
+    }
   };
 
   if (loading) {
@@ -174,6 +398,108 @@ const EmployeeProfile = () => {
         </View>
       </View>
 
+      {/* Monthly Attendance Stats */}
+      <View style={styles.sectionContainer}>
+        <Text style={styles.sectionTitle}>Monthly Attendance</Text>
+        
+        <View style={styles.monthSelector}>
+          <TouchableOpacity onPress={handlePreviousMonth} style={styles.monthButton}>
+            <Icon name="chevron-left" size={24} color="#1e88e5" />
+          </TouchableOpacity>
+          
+          <Text style={styles.monthYearText}>
+            {months[selectedMonth]} {selectedYear}
+          </Text>
+          
+          <TouchableOpacity 
+            onPress={handleNextMonth} 
+            style={styles.monthButton}
+            disabled={selectedMonth === new Date().getMonth() && selectedYear === new Date().getFullYear()}
+          >
+            <Icon 
+              name="chevron-right" 
+              size={24} 
+              color={selectedMonth === new Date().getMonth() && 
+                     selectedYear === new Date().getFullYear() ? 
+                     "#ccc" : "#1e88e5"} 
+            />
+          </TouchableOpacity>
+        </View>
+        
+        {monthlyStats ? (
+          <>
+            <View style={styles.statsGrid}>
+              <View style={styles.statCard}>
+                <CircularProgress 
+                  percentage={monthlyStats.workPercentage} 
+                  color="#4CAF50" 
+                  title="Work Days"
+                  subtitle={`${monthlyStats.workDays} days`}
+                />
+              </View>
+              
+              <View style={styles.statCard}>
+                <CircularProgress 
+                  percentage={monthlyStats.leavePercentage} 
+                  color="#2196F3" 
+                  title="Approved Leave"
+                  subtitle={`${monthlyStats.leaveDays} days`}
+                />
+              </View>
+              
+              <View style={styles.statCard}>
+                <CircularProgress 
+                  percentage={monthlyStats.pendingLeavePercentage} 
+                  color="#FFC107" 
+                  title="Pending Leave"
+                  subtitle={`${monthlyStats.pendingLeaveDays} days`}
+                />
+              </View>
+              
+              <View style={styles.statCard}>
+                <CircularProgress 
+                  percentage={monthlyStats.absentPercentage} 
+                  color="#F44336" 
+                  title="Absent"
+                  subtitle={`${monthlyStats.absentDays} days`}
+                />
+              </View>
+            </View>
+
+            <View style={styles.summaryContainer}>
+              <Text style={styles.summaryTitle}>Month Summary</Text>
+              <View style={styles.summaryRow}>
+                <View style={styles.summaryItem}>
+                  <Text style={styles.summaryLabel}>Business Days:</Text>
+                  <Text style={styles.summaryValue}>{monthlyStats.businessDays}</Text>
+                </View>
+                <View style={styles.summaryItem}>
+                  <Text style={styles.summaryLabel}>Weekend Days:</Text>
+                  <Text style={styles.summaryValue}>{monthlyStats.weekendDays}</Text>
+                </View>
+              </View>
+              <View style={styles.summaryRow}>
+                <View style={styles.summaryItem}>
+                  <Text style={styles.summaryLabel}>Total Days:</Text>
+                  <Text style={styles.summaryValue}>{monthlyStats.daysInMonth}</Text>
+                </View>
+                <View style={styles.summaryItem}>
+                  <Text style={styles.summaryLabel}>Calculated On:</Text>
+                  <Text style={styles.summaryValue}>{monthlyStats.pastBusinessDays} days</Text>
+                </View>
+              </View>
+              {monthlyStats.isCurrentMonth && (
+                <Text style={styles.summaryNote}>
+                  * Statistics based on completed days only
+                </Text>
+              )}
+            </View>
+          </>
+        ) : (
+          <Text style={styles.emptyText}>No attendance data for this month</Text>
+        )}
+      </View>
+
       {/* Attendance History */}
       <View style={styles.sectionContainer}>
         <Text style={styles.sectionTitle}>Recent Attendance</Text>
@@ -194,6 +520,14 @@ const EmployeeProfile = () => {
                 <View style={styles.timeBlock}>
                   <Text style={styles.timeLabel}>End</Text>
                   <Text style={styles.time}>{formatTime(item.endTime)}</Text>
+                </View>
+                <View style={styles.timeBlock}>
+                  <Text style={styles.timeLabel}>Duration</Text>
+                  <Text style={styles.time}>
+                    {item.startTime && item.endTime ? 
+                      calculateDuration(item.startTime, item.endTime) : 
+                      'N/A'}
+                  </Text>
                 </View>
               </View>
             </View>
@@ -220,6 +554,9 @@ const EmployeeProfile = () => {
                   {item.status?.toUpperCase() || 'PENDING'}
                 </Text>
               </View>
+              <Text style={styles.leaveType}>
+                {formatLeaveType(item.leaveType)}
+              </Text>
               <Text style={styles.leaveReason}>{item.reason || 'No reason provided'}</Text>
               <Text style={styles.leaveTimestamp}>
                 Requested on: {formatDate(item.timestamp)}
@@ -232,6 +569,40 @@ const EmployeeProfile = () => {
       </View>
     </ScrollView>
   );
+};
+
+// Helper functions
+const calculateDuration = (startTime, endTime) => {
+  if (!startTime || !endTime) return 'N/A';
+  
+  // Get total milliseconds difference
+  const diffMs = endTime.getTime() - startTime.getTime();
+  
+  // Convert to hours, minutes, and seconds
+  const hours = Math.floor(diffMs / (1000 * 60 * 60));
+  const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+  const seconds = Math.floor((diffMs % (1000 * 60)) / 1000);
+  
+  // Format based on duration length
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  } else if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  } else {
+    return `${seconds}s`;
+  }
+};
+
+const formatLeaveType = (type) => {
+  if (!type) return '';
+  
+  switch(type) {
+    case 'sick_leave': return 'Sick Leave';
+    case 'personal_leave': return 'Personal Leave';
+    case 'govt_holiday': return 'Government Holiday';
+    case 'other': return 'Other';
+    default: return type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+  }
 };
 
 const styles = StyleSheet.create({
@@ -311,6 +682,75 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     color: '#333',
   },
+  // Month selector styles
+  monthSelector: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  monthButton: {
+    padding: 8,
+  },
+  monthYearText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  // Stats grid
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
+  statCard: {
+    width: '48%',
+    backgroundColor: '#f9f9f9',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  summaryContainer: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+  },
+  summaryTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  summaryItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  summaryLabel: {
+    fontSize: 14,
+    color: '#666',
+    marginRight: 4,
+  },
+  summaryValue: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#333',
+  },
+  summaryNote: {
+    fontSize: 12,
+    fontStyle: 'italic',
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 8,
+  },
   historyItem: {
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
@@ -346,7 +786,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   time: {
-    fontSize: 16,
+    fontSize: 15,
     color: '#333',
   },
   leaveItem: {
@@ -358,11 +798,16 @@ const styles = StyleSheet.create({
   leaveHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   leaveDate: {
     fontWeight: 'bold',
     fontSize: 16,
+  },
+  leaveType: {
+    fontSize: 14,
+    color: '#1e88e5',
+    marginBottom: 6,
   },
   leaveStatus: {
     fontSize: 12,
